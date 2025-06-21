@@ -4,46 +4,73 @@ const cors = require("cors");
 require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 3000;
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+// Conditional Stripe initialization
+let stripe = null;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+} else {
+  console.warn("Warning: STRIPE_SECRET_KEY not found. Payment functionality will be disabled.");
+}
 
 // Cloudinary configuration
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Conditional Cloudinary configuration
+if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+} else {
+  console.warn("Warning: Cloudinary credentials not found. Image upload functionality will be disabled.");
+}
 
 app.use(cors());
 app.use(express.json());
 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@ph-cluster.8kwdmtt.mongodb.net/?retryWrites=true&w=majority&appName=PH-Cluster`;
+// Conditional MongoDB connection
+let client = null;
+let database = null;
+let collections = {};
 
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
-});
+if (process.env.DB_USER && process.env.DB_PASS) {
+  const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@ph-cluster.8kwdmtt.mongodb.net/?retryWrites=true&w=majority&appName=PH-Cluster`;
 
-// Database and collections references
-const database = client.db("plantopia");
-const collections = {
-  plants: database.collection("plants"),
-  tools: database.collection("tools"),
-  soils: database.collection("soils"),
-  fertilizers: database.collection("fertilizers"),
-  users: database.collection("users"),
-  orders: database.collection("orders"),
-  blogs: database.collection("blogs"),
-};
+  client = new MongoClient(uri, {
+    serverApi: {
+      version: ServerApiVersion.v1,
+      strict: true,
+      deprecationErrors: true,
+    },
+  });
+
+  // Database and collections references
+  database = client.db("plantopia");
+  collections = {
+    plants: database.collection("plants"),
+    tools: database.collection("tools"),
+    soils: database.collection("soils"),
+    fertilizers: database.collection("fertilizers"),
+    users: database.collection("users"),
+    orders: database.collection("orders"),
+    blogs: database.collection("blogs"),
+  };
+} else {
+  console.warn("Warning: Database credentials not found. Database functionality will be disabled.");
+}
 
 async function run() {
   try {
+    // Check if database is configured
+    if (!client) {
+      console.log("Database not configured. Starting server without database functionality.");
+      return;
+    }
+
     await client.connect();
 
     // User related endpoints
@@ -1023,6 +1050,13 @@ async function run() {
     // Create payment intent for Stripe
     app.post("/api/create-payment-intent", async (req, res) => {
       try {
+        if (!stripe) {
+          return res.status(503).json({
+            success: false,
+            message: "Payment service is not configured. Please set up Stripe API key.",
+          });
+        }
+
         const { amount, currency } = req.body;
         const paymentIntent = await stripe.paymentIntents.create({
           amount: Math.round(amount), // Ensure amount is an integer
@@ -1091,6 +1125,18 @@ async function run() {
           });
         }
 
+        // Check if Cloudinary is configured
+        if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+          // Clean up the temporary file
+          const fs = require('fs');
+          fs.unlinkSync(req.file.path);
+          
+          return res.status(503).json({
+            success: false,
+            message: 'Image upload service is not configured. Please set up Cloudinary credentials.'
+          });
+        }
+
         // Upload to Cloudinary
         const result = await cloudinary.uploader.upload(req.file.path, {
           folder: 'plantopia',
@@ -1142,6 +1188,24 @@ app.get("/", (req, res) => {
   res.send("Server is Hot now");
 });
 
+// Health check endpoint
+app.get("/health", (req, res) => {
+  const health = {
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    services: {
+      database: client ? "configured" : "not configured",
+      stripe: stripe ? "configured" : "not configured",
+      cloudinary: (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) ? "configured" : "not configured"
+    }
+  };
+  res.json(health);
+});
+
 app.listen(port, () => {
   console.log(`Server running on port: ${port}`);
+  console.log("Environment Status:");
+  console.log(`- Database: ${client ? "Configured" : "Not configured"}`);
+  console.log(`- Stripe: ${stripe ? "Configured" : "Not configured"}`);
+  console.log(`- Cloudinary: ${(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) ? "Configured" : "Not configured"}`);
 });
