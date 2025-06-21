@@ -1044,6 +1044,43 @@ async function run() {
       }
     });
 
+    // Make user admin (for development/testing purposes)
+    app.post("/api/make-admin", async (req, res) => {
+      try {
+        const { email } = req.body;
+        
+        if (!email) {
+          return res.status(400).json({
+            success: false,
+            message: 'Email is required'
+          });
+        }
+
+        const result = await collections.users.updateOne(
+          { email: email },
+          { $set: { role: 'admin', updatedAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'User not found with this email'
+          });
+        }
+
+        res.json({
+          success: true,
+          message: `User with email ${email} is now an admin`
+        });
+      } catch (error) {
+        console.error('Error making user admin:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Failed to make user admin'
+        });
+      }
+    });
+
     // Image upload endpoint
     app.post("/api/upload-image", upload.single('image'), async (req, res) => {
       try {
